@@ -1,0 +1,6 @@
+*.csv
+akshare.ipynb
+*.pyc
+.history
+.venv
+__pycache__
