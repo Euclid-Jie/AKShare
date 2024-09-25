@@ -1,0 +1,240 @@
+import akshare as ak
+from typing import Literal
+import pandas as pd
+import numpy as np
+from pathlib import Path
+
+
+class AKData:
+    def __init__(self, database_type: Literal["postgres", "h5", "csv"]):
+        self.database_type = database_type
+
+    def rewrite(self, func, data_name, *args, **kwargs):
+        print(f"rewrite {data_name} data")
+        data = func(*args, **kwargs)
+        data["symbol"] = kwargs.get("symbol")
+        data = self.format_data(data)
+        data.to_csv(f"{data_name}.csv", index=False)
+        return data
+
+    def local_read_and_append(self, func, data_name: str, rewrite: bool = False):
+        def wrapper(*args, **kwargs):
+            assert "symbol" in kwargs, "symbol is required"
+            assert "start_date" in kwargs, "start_date is required"
+            assert "end_date" in kwargs, "end_date is required"
+            if (
+                self.database_type == "csv"
+                and Path(f"{data_name}.csv").exists()
+                and not rewrite
+            ):
+                print(f"load data from {data_name}.csv")
+                data = self.load_data_csv(data_name=data_name)
+                data = data[data["symbol"] == kwargs.get("symbol")]
+                if data.empty:
+                    data = self.rewrite(func, data_name, *args, **kwargs)
+                data = data[
+                    ((data["date"] >= kwargs.get("start_date")))
+                    & (data["date"] <= kwargs.get("end_date"))
+                ]
+                if data.empty:
+                    data = self.rewrite(func, data_name, *args, **kwargs)
+                # TODO 开发前期只写了一个简单的逻辑，后续需要完善
+                exit_end_date = data["date"].max()
+                if exit_end_date < kwargs.get("end_date"):
+                    kwargs["start_date"] = exit_end_date
+                    add_data["symbol"] = kwargs.get("symbol")
+                    add_data = self.format_data(func(*args, **kwargs))
+                    data = pd.concat([data, add_data])
+                    data.to_csv(f"{data_name}.csv", index=False)
+            else:
+                data = self.rewrite(func, data_name, *args, **kwargs)
+            return data
+
+        return wrapper
+
+    def stock_zh_a_daily(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        adjust: str,
+        rewrite: bool = False,
+    ):
+        return self.local_read_and_append(
+            ak.stock_zh_a_daily,
+            data_name="stock_zh_a_daily",
+            rewrite=rewrite,
+        )(symbol=symbol, start_date=start_date, end_date=end_date, adjust=adjust)
+
+    def format_data(self, data: pd.DataFrame) -> pd.DataFrame:
+        assert not data.empty, "data is empty"
+        result = data.copy()
+        result.rename(
+            columns={
+                "日期": "date",
+                "开盘价": "open",
+                "收盘价": "close",
+                "最高价": "high",
+                "最低价": "low",
+                "成交量": "volume",
+                "成交额": "amount",
+            },
+            inplace=True,
+        )
+        result["date"] = pd.to_datetime(result["date"])
+        if "symbol" in data.columns:
+            if data["symbol"].dtype == "int64":
+
+                result["symbol"] = data["symbol"].apply(lambda x: str(x).zfill(6))
+        return result
+
+    def load_data_h5(self, data_name):
+        pass
+
+    def load_data_postgres(self, data_name):
+        pass
+
+    def load_data_csv(self, data_name: str):
+        data = pd.read_csv(f"{data_name}.csv")
+        assert not data.empty, "data is empty"
+        data["date"] = pd.to_datetime(data["date"])
+        if "symbol" in data.columns:
+            if data["symbol"].dtype == "int64":
+                data["symbol"] = data["symbol"].apply(lambda x: str(x).zfill(6))
+        return data
+
+    def stock_zh_a_daily_hfq(
+        self,
+        symbol: str,
+        start_date: np.datetime64,
+        end_date: np.datetime64,
+        rewrite: bool = False,
+    ):
+        return self.local_read_and_append(
+            ak.stock_zh_a_daily, data_name="stock_zh_a_daily_hfq", rewrite=rewrite
+        )(symbol=symbol, start_date=start_date, end_date=end_date, adjust="hfq")
+
+    def stock_zh_a_daily_qfq(
+        self,
+        symbol: str,
+        start_date: np.datetime64,
+        end_date: np.datetime64,
+        rewrite: bool = False,
+    ):
+        return self.local_read_and_append(
+            ak.stock_zh_a_daily, data_name="stock_zh_a_daily_qfq", rewrite=rewrite
+        )(symbol=symbol, start_date=start_date, end_date=end_date, adjust="qfq")
+
+    def stock_zh_a_daily(
+        self,
+        symbol: str,
+        start_date: np.datetime64,
+        end_date: np.datetime64,
+        rewrite: bool = False,
+    ):
+        return self.local_read_and_append(
+            ak.stock_zh_a_daily, data_name="stock_zh_a_daily", rewrite=rewrite
+        )(symbol=symbol, start_date=start_date, end_date=end_date, adjust="")
+
+    def _stock_zh_index_daily_em(
+        self, symbol: str, start_date: np.datetime64, end_date: np.datetime64
+    ):
+        start_date = np.datetime_as_string(start_date, unit="D").replace("-", "")
+        end_date = np.datetime_as_string(end_date, unit="D").replace("-", "")
+        return ak.stock_zh_index_daily_em(
+            symbol=symbol, start_date=start_date, end_date=end_date
+        )
+
+    def stock_zh_index_daily(
+        self,
+        symbol: str,
+        start_date: np.datetime64,
+        end_date: np.datetime64,
+        rewrite: bool = False,
+    ):
+        return self.local_read_and_append(
+            self._stock_zh_index_daily_em,
+            data_name="stock_zh_index_daily",
+            rewrite=rewrite,
+        )(symbol=symbol, start_date=start_date, end_date=end_date)
+
+    def _stock_zh_index_hist_csindex(
+        self, symbol: str, start_date: np.datetime64, end_date: np.datetime64
+    ):
+        start_date = np.datetime_as_string(start_date, unit="D").replace("-", "")
+        end_date = np.datetime_as_string(end_date, unit="D").replace("-", "")
+        data = ak.stock_zh_index_hist_csindex(
+            symbol=symbol, start_date=start_date, end_date=end_date
+        )
+        data = data.rename(
+            columns={
+                "最高": "high",
+                "最低": "low",
+                "开盘": "open",
+                "收盘": "close",
+            }
+        )
+        return data
+
+    def stock_zh_index_hist_csindex(
+        self,
+        symbol: str,
+        start_date: np.datetime64,
+        end_date: np.datetime64,
+        rewrite: bool = False,
+    ):
+        return self.local_read_and_append(
+            self._stock_zh_index_hist_csindex,
+            data_name="stock_zh_index_hist_csindex",
+            rewrite=rewrite,
+        )(symbol=symbol, start_date=start_date, end_date=end_date)
+
+    def _index_hist_cni(
+        self, symbol: str, start_date: np.datetime64, end_date: np.datetime64
+    ):
+        start_date = np.datetime_as_string(start_date, unit="D").replace("-", "")
+        end_date = np.datetime_as_string(end_date, unit="D").replace("-", "")
+        data = ak.index_hist_cni(
+            symbol=symbol, start_date=start_date, end_date=end_date
+        )
+        return data
+
+    def index_hist_cni(
+        self,
+        symbol: str,
+        start_date: np.datetime64,
+        end_date: np.datetime64,
+        rewrite: bool = False,
+    ):
+        return self.local_read_and_append(
+            self._index_hist_cni, data_name="index_hist_cni", rewrite=rewrite
+        )(symbol=symbol, start_date=start_date, end_date=end_date)
+
+    def futures_display_main_sina(self, rewrite: bool = False):
+        if Path("futures_display_main_sina.csv").exists() and not rewrite:
+            print("load data from futures_display_main_sina.csv")
+            data = pd.read_csv("futures_display_main_sina.csv")
+        else:
+            data = ak.futures_display_main_sina()
+            data.to_csv("futures_display_main_sina.csv", index=False)
+        return data
+
+    def futures_main_sina(
+        self, symbol: str, start_date: str, end_date: str, rewrite: bool = False
+    ):
+        return self.local_read_and_append(
+            ak.futures_main_sina,
+            data_name="futures_main_sina",
+            rewrite=rewrite,
+        )(symbol=symbol, start_date=start_date, end_date=end_date)
+
+
+if __name__ == "__main__":
+    akdata = AKData(database_type="csv")
+    df = akdata.index_hist_cni(
+        symbol="399303",
+        start_date=np.datetime64("2015-01-01"),
+        end_date=np.datetime64("2024-09-24"),
+        rewrite=False,
+    )
+    print(df)
