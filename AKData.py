@@ -81,11 +81,11 @@ class AKData:
             },
             inplace=True,
         )
-        result["date"] = pd.to_datetime(result["date"])
-        if "symbol" in data.columns:
-            if data["symbol"].dtype == "int64":
-
-                result["symbol"] = data["symbol"].apply(lambda x: str(x).zfill(6))
+        if "date" in data.columns:
+            result["date"] = pd.to_datetime(result["date"])
+        for symbol_col in [i for i in data.columns if "symbol" in i]:
+            if data[symbol_col].dtype == "int64":
+                result[symbol_col] = data[symbol_col].apply(lambda x: str(x).zfill(6))
         return result
 
     def load_data_h5(self, data_name):
@@ -102,6 +102,17 @@ class AKData:
             if data["symbol"].dtype == "int64":
                 data["symbol"] = data["symbol"].apply(lambda x: str(x).zfill(6))
         return data
+
+    # NOTE 股票数据
+    def stock_individual_spot_xq(self, symbol: str):
+        """
+        个股实时行情-雪球数据
+        param symbol: 股票代码
+            中证: {"CSI000985":中证全指, "CSI932000":"中证2000", "CSI000852":"中证1000","CSI000905":"中证500"}
+            上证: {"SH000001":"上证指数", "SH000300":"沪深300"}
+            深证: {"SZ399303":"国证2000", "SZ399001":"深证成指", "SZ399006":"创业板指"}
+        """
+        return ak.stock_individual_spot_xq(symbol=symbol)
 
     def stock_zh_a_daily_hfq(
         self,
@@ -136,6 +147,19 @@ class AKData:
             ak.stock_zh_a_daily, data_name="stock_zh_a_daily", rewrite=rewrite
         )(symbol=symbol, start_date=start_date, end_date=end_date, adjust="")
 
+    # NOTE 指数数据
+    def stock_zh_index_spot_sina(rewrite: bool = False):
+        """
+        新浪财经-行情中心首页-A股-分类-所有指数
+        """
+        if Path("stock_zh_index_spot_sina.csv").exists() and not rewrite:
+            print("load data from stock_zh_index_spot_sina.csv")
+            data = pd.read_csv("stock_zh_index_spot_sina.csv")
+        else:
+            data = ak.stock_zh_index_spot_sina()
+            data.to_csv("stock_zh_index_spot_sina.csv", index=False)
+        return data
+
     def _stock_zh_index_daily_em(
         self, symbol: str, start_date: np.datetime64, end_date: np.datetime64
     ):
@@ -152,10 +176,29 @@ class AKData:
         end_date: np.datetime64,
         rewrite: bool = False,
     ):
+        """
+        历史行情数据-东方财富
+        """
         return self.local_read_and_append(
             self._stock_zh_index_daily_em,
             data_name="stock_zh_index_daily",
             rewrite=rewrite,
+        )(symbol=symbol, start_date=start_date, end_date=end_date)
+
+    def index_zh_a_hist(
+        self,
+        symbol: str,
+        start_date: np.datetime64,
+        end_date: np.datetime64,
+        period: Literal["daily", "weekly", "monthly"] = "daily",
+        rewrite: bool = False,
+    ):
+        """
+        东方财富网-中国股票指数-行情数据
+        单次返回具体指数指定 period 从 start_date 到 end_date 的之间的近期数据
+        """
+        return self.local_read_and_append(
+            ak.index_zh_a_hist, data_name="index_zh_a_hist", rewrite=rewrite
         )(symbol=symbol, start_date=start_date, end_date=end_date)
 
     def _stock_zh_index_hist_csindex(
@@ -183,11 +226,80 @@ class AKData:
         end_date: np.datetime64,
         rewrite: bool = False,
     ):
+        """中证指数历史数据
+        param
+            symbol: 中证指数代码, e.g. "000985","932000","000852","000905"
+        """
         return self.local_read_and_append(
             self._stock_zh_index_hist_csindex,
             data_name="stock_zh_index_hist_csindex",
             rewrite=rewrite,
         )(symbol=symbol, start_date=start_date, end_date=end_date)
+
+    def index_stock_info(self, rewrite: bool = False):
+        """
+        聚宽-指数数据-指数列表
+        """
+        if Path("index_stock_info.csv").exists() and not rewrite:
+            print("load data from index_stock_info.csv")
+            data = pd.read_csv("index_stock_info.csv")
+            data = data.copy().rename(columns={"index_code	": "symbol"})
+            data = self.format_data(data)
+        else:
+            data = ak.index_stock_info()
+            data = data.copy().rename(columns={"index_code": "symbol"})
+            self.format_data(data).to_csv("index_stock_info.csv", index=False)
+        return data
+
+    # NOTE 通用 指数成分股
+    def _index_stock_cons(self, symbol: str):
+        data = ak.index_stock_cons(symbol=symbol)
+        data = data.copy().rename(columns={"品种代码": "cons_symbol"})
+        return data
+
+    def index_stock_cons(self, symbol: str, rewrite: bool = False):
+        if Path("index_stock_cons.csv").exists() and not rewrite:
+            data = self.format_data(pd.read_csv("index_stock_cons.csv"))
+            data = data[data["symbol"] == symbol]
+            if data.empty:
+                data = self.rewrite(
+                    self._index_stock_cons, "index_stock_cons", symbol=symbol
+                )
+            else:
+                print("load data from index_stock_cons.csv")
+        else:
+            data = self.rewrite(
+                self._index_stock_cons, "index_stock_cons", symbol=symbol
+            )
+        return data
+
+    # NOTE 中证指数成分股
+    def _index_stock_cons_csindex(self, symbol: str):
+        data = ak.index_stock_cons_csindex(symbol=symbol)
+        data = data.copy().rename(
+            columns={"指数代码": "symbol", "成分券代码": "cons_symbol"}
+        )
+        return data
+
+    def index_stock_cons_csindex(self, symbol: str, rewrite: bool = False):
+        if Path("index_stock_cons_csindex.csv").exists() and not rewrite:
+            data = self.format_data(pd.read_csv("index_stock_cons_csindex.csv"))
+            data = data[data["symbol"] == symbol]
+            if data.empty:
+                data = self.rewrite(
+                    self._index_stock_cons_csindex,
+                    "index_stock_cons_csindex",
+                    symbol=symbol,
+                )
+            else:
+                print("load data from index_stock_cons_csindex.csv")
+        else:
+            data = self.rewrite(
+                self._index_stock_cons_csindex,
+                "index_stock_cons_csindex",
+                symbol=symbol,
+            )
+        return data
 
     def _index_hist_cni(
         self, symbol: str, start_date: np.datetime64, end_date: np.datetime64
@@ -230,11 +342,6 @@ class AKData:
 
 
 if __name__ == "__main__":
-    akdata = AKData(database_type="csv")
-    df = akdata.index_hist_cni(
-        symbol="399303",
-        start_date=np.datetime64("2015-01-01"),
-        end_date=np.datetime64("2024-09-24"),
-        rewrite=False,
-    )
-    print(df)
+    ak_data = AKData(database_type="csv")
+    df = ak_data.index_stock_cons(symbol="399303")
+    # print(df)
